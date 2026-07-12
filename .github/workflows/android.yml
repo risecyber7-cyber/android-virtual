@@ -1,0 +1,58 @@
+name: Android Emulator
+
+on:
+  workflow_dispatch:
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-kvm
+          sudo chown $USER /dev/kvm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Emulator & System Image
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "emulator" \
+            "system-images;android-35;google_apis;x86_64"
+
+      - name: Create AVD
+        run: |
+          echo "no" | avdmanager create avd \
+            -n test \
+            -k "system-images;android-35;google_apis;x86_64"
+
+      - name: Start Emulator
+        run: |
+          $ANDROID_HOME/emulator/emulator \
+            -avd test \
+            -no-window \
+            -gpu swiftshader_indirect \
+            -no-audio \
+            -no-boot-anim &
+          adb wait-for-device
+          adb shell getprop sys.boot_completed | grep -m 1 "1"
+
+      - name: Verify
+        run: |
+          adb devices
+          adb shell getprop ro.product.cpu.abi
+          adb shell getprop ro.build.version.release
