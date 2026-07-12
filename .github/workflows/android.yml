@@ -1,80 +1,134 @@
-name: Android Emulator
+name: Android Emulator Remote
 
 on:
   workflow_dispatch:
 
 jobs:
   emulator:
+    name: Android Emulator
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      DISPLAY: ":99"
+      ANDROID_AVD_HOME: ~/.android/avd
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Enable KVM
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-kvm
-          sudo chown $USER /dev/kvm
-
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      - name: Enable KVM
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-kvm
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Emulator & System Image
+      - name: Accept SDK Licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install SDK Components
         run: |
-          sdkmanager --install \
+          sdkmanager \
             "platform-tools" \
-            "platforms;android-35" \
             "emulator" \
+            "platforms;android-35" \
             "system-images;android-35;google_apis;x86_64"
 
-      - name: Create AVD
+      - name: Create Emulator
         run: |
           echo "no" | avdmanager create avd \
-            -n test \
-            -k "system-images;android-35;google_apis;x86_64"
-      - name: Install noVNC & websockify
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y novnc websockify xvfb x11vnc
+            --force \
+            --name github \
+            --package "system-images;android-35;google_apis;x86_64"
 
-      - name: Start Virtual Display
+      - name: Install Remote Desktop Packages
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            xvfb \
+            x11vnc \
+            novnc \
+            websockify \
+            wget
+
+      - name: Start X Server
         run: |
           Xvfb :99 -screen 0 1280x720x24 &
-          export DISPLAY=:99
-          x11vnc -display :99 -forever -nopw &
-          websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
+          sleep 3
 
-      - name: Expose via Cloudflare Tunnel
+      - name: Start Android Emulator
         run: |
-          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod +x cloudflared-linux-amd64
-          ./cloudflared-linux-amd64 tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
-          sleep 15
-          grep -o 'https://[-a-zA-Z0-9.]*trycloudflare.com' tunnel.log
-
-      - name: Keep Runner Alive (6 Hours)
-        run: sleep 21600
-        
-      - name: Start Emulator
-        run: |
-          $ANDROID_HOME/emulator/emulator \
-            -avd test \
-            -no-window \
+          nohup $ANDROID_HOME/emulator/emulator \
+            -avd github \
             -gpu swiftshader_indirect \
+            -no-snapshot \
             -no-audio \
-            -no-boot-anim &
-          adb wait-for-device
-          adb shell getprop sys.boot_completed | grep -m 1 "1"
+            -camera-back none \
+            -camera-front none \
+            -memory 4096 \
+            -cores 4 \
+            > emulator.log 2>&1 &
 
-      - name: Verify
+      - name: Wait for Boot
+        run: |
+          adb start-server
+          adb wait-for-device
+
+          timeout 600 bash -c '
+          until adb shell getprop sys.boot_completed | grep -q 1; do
+            sleep 5
+          done'
+
+          adb shell input keyevent 82
+
+      - name: Start VNC
+        run: |
+          x11vnc \
+            -display :99 \
+            -forever \
+            -shared \
+            -nopw \
+            -rfbport 5900 &
+
+      - name: Start noVNC
+        run: |
+          websockify \
+            --web=/usr/share/novnc \
+            6080 localhost:5900 &
+
+      - name: Install Cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared-linux-amd64
+
+      - name: Create Tunnel
+        run: |
+          ./cloudflared-linux-amd64 tunnel \
+            --url http://localhost:6080 \
+            > cloudflare.log 2>&1 &
+
+          sleep 20
+
+          echo "=============================="
+          grep -o 'https://[-a-zA-Z0-9]*\.trycloudflare\.com' cloudflare.log || true
+          echo "=============================="
+
+      - name: Verify Emulator
         run: |
           adb devices
-          adb shell getprop ro.product.cpu.abi
           adb shell getprop ro.build.version.release
+          adb shell getprop ro.product.model
+          adb shell wm size
+
+      - name: Keep Runner Alive
+        run: |
+          echo "Runner will stay alive for 6 hours..."
+          sleep 21600
