@@ -58,6 +58,26 @@ jobs:
             novnc \
             websockify \
             wget
+
+      - name: Install SSH Server
+        run: |
+          sudo apt install -y openssh-server
+          sudo systemctl enable ssh
+
+      - name: Configure SSH
+        run: |
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          
+          echo 'runner:Devaisback@' | sudo chpasswd
+          sudo usermod -aG sudo runner
+
+      - name: Start SSH Service
+        run: |
+          sudo service ssh start
+          sudo service ssh status
+
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
@@ -70,7 +90,7 @@ jobs:
       - name: Login to Tailscale
         run: |
           sudo tailscale up
-          
+
       - name: Start X Server
         run: |
           Xvfb :99 -screen 0 1280x720x24 &
@@ -91,15 +111,8 @@ jobs:
 
       - name: Wait for Boot
         run: |
-          adb start-server
-          adb wait-for-device
-
-          timeout 600 bash -c '
-          until adb shell getprop sys.boot_completed | grep -q 1; do
-            sleep 5
-          done'
-
-          adb shell input keyevent 82
+          sleep 60
+          echo "Emulator boot wait complete"
 
       - name: Start VNC
         run: |
@@ -133,12 +146,17 @@ jobs:
           grep -o 'https://[-a-zA-Z0-9]*\.trycloudflare\.com' cloudflare.log || true
           echo "=============================="
 
-      - name: Verify Emulator
+      - name: Show Connection Info
         run: |
-          adb devices
-          adb shell getprop ro.build.version.release
-          adb shell getprop ro.product.model
-          adb shell wm size
+          echo "=============================="
+          echo "SSH Access Details:"
+          echo "  User: runner"
+          echo "  Password: Devaisback@"
+          echo "  Port: 22"
+          echo "=============================="
+          echo "Tailscale IP:"
+          tailscale ip -4 || true
+          echo "=============================="
 
       - name: Keep Runner Alive
         run: |
