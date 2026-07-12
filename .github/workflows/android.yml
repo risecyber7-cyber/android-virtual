@@ -39,7 +39,29 @@ jobs:
           echo "no" | avdmanager create avd \
             -n test \
             -k "system-images;android-35;google_apis;x86_64"
+      - name: Install noVNC & websockify
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y novnc websockify xvfb x11vnc
 
+      - name: Start Virtual Display
+        run: |
+          Xvfb :99 -screen 0 1280x720x24 &
+          export DISPLAY=:99
+          x11vnc -display :99 -forever -nopw &
+          websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
+
+      - name: Expose via Cloudflare Tunnel
+        run: |
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared-linux-amd64
+          ./cloudflared-linux-amd64 tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
+          sleep 15
+          grep -o 'https://[-a-zA-Z0-9.]*trycloudflare.com' tunnel.log
+
+      - name: Keep Runner Alive (6 Hours)
+        run: sleep 21600
+        
       - name: Start Emulator
         run: |
           $ANDROID_HOME/emulator/emulator \
